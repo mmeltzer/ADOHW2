@@ -35,7 +35,7 @@ typedef int PageNumber;
 
 typedef struct BM_BufferPool {
   char *pageFile;
-  int numPages;
+  int numPages;         //size of the pool
   ReplacementStrategy strategy;
   void *mgmtData; // use this one to store the bookkeeping info your buffer 
                   // manager needs for a buffer pool
@@ -43,7 +43,12 @@ typedef struct BM_BufferPool {
 
 typedef struct BM_PageHandle {
   PageNumber pageNum;
-  char *data;
+  SM_PageHandle data;
+
+  //add two features
+  int pin_fix_count;   //can be increased or decreased
+  int dirty;    //0 is clean, 1 is dirty.
+
 } BM_PageHandle;
 
 //the BM_mgmtData structure comprises:
@@ -53,8 +58,10 @@ typedef struct BM_mgmtData {
 
   BM_PageHandle *pages[];
   SM_FileHandle *fileHandle;
-  int pin[];
-  int dirty[];
+
+  //add two features, the number of pages in the pool that is occupied.
+  int page_count;
+
   int LRU_order[]; //hold the order of LRU
 
 } BM_mgmtData;
@@ -101,8 +108,8 @@ RC initBufferPool(BM_BufferPool *const bm, const char *const pageFileName,
         //repeatedly create new memory space, and assign the space to BM_PageHandle's.
         SM_PageHandle *page=(SM_PageHandle *)malloc(PAGE_SIZE);
 
-        //when to use '.', when to use '->'?
-        pages[i].PageNumber=i;
+        //when using [], the pointer turns to object, so we use '.'
+        pages[i].PageNumber=-1;   //at beginning, set all page number to be -1.
         pages[i].data=page;
 
     }
@@ -112,6 +119,7 @@ RC initBufferPool(BM_BufferPool *const bm, const char *const pageFileName,
 
     for(k=0;k<numPages;k++){
 
+      //so, every page now is a pointer to a PageHandle object
       mgmtDataPool->pages[k]=&pages[k];
 
     }
@@ -123,17 +131,12 @@ RC initBufferPool(BM_BufferPool *const bm, const char *const pageFileName,
 
     mgmtDataPool->fileHandle=fileHandle;
 
-    //3 initialize the int array that contains the pin information, make them all 0.
-    int pin[numPages]={0};
-    memcpy(mgmtDataPool->pin, pin, sizeof(pin));
-
-    //4, initialize the int array that contains the dirty information, make them all 0.
-    int dirty[numPages]={0};
-    memcpy(mgmtDataPool->dirty, dirty, sizeof(dirty));
-
-    //4, initialize the int array that contains the dirty information, make them all 0.
+    //3, initialize the int array that contains the dirty information, make them all 0.
     int LRU_order[numPages]={0};
     memcpy(mgmtDataPool->LRU_order, LRU_order, sizeof(LRU_order));
+
+    //4, page count
+    mgmtDataPool->page_count=0;
 
     //by now, the BM_mgmtData object has the memory space as well as all info about the file on disk.
 
@@ -159,14 +162,244 @@ RC shutdownBufferPool(BM_BufferPool *const bm){
 }
 
 //
-RC forceFlushPool(BM_BufferPool *const bm);
+RC forceFlushPool(BM_BufferPool *const bm){
+
+  //write back after checking the dirty attribute and pin_fix_count attribute
+  int i, page_count;
+
+  page_count=bm->mgmtData->page_count;
+
+  for(i=0;i<page_count;i++){
+
+    if(bm->mgmtData->pages[i].pin_fix_count==0 && bm->mgmtData->pages[i].dirty==1){
+
+      writeBlock(bm->mgmtData->pages[i].pageNum, bm->mgmtData->fileHandle, bm->mgmtData->pages[i].data);
+
+      //change the dirty into 0
+      bm->mgmtData->pages[i].dirty=0;
+
+    }
+  }
+
+}
 
 // Buffer Manager Interface Access Pages
-RC markDirty (BM_BufferPool *const bm, BM_PageHandle *const page);
-RC unpinPage (BM_BufferPool *const bm, BM_PageHandle *const page);
-RC forcePage (BM_BufferPool *const bm, BM_PageHandle *const page);
+RC markDirty (BM_BufferPool *const bm, BM_PageHandle *const page){
+
+  //find the page in the buffer pool
+  int position, k, page_count;
+
+  position=0;
+  page_count=bm->mgmtData->page_count;
+
+  boolean exist;
+
+  exist=false;
+
+  while(!exist||position<page_count){
+
+    k=bm->mgmtData->pages[position].pageNum;
+
+    if(page->pageNum==k){
+      
+      exist=true;
+
+    }
+
+    position++; //the position will be one more than real position when the loop ends
+
+  }
+
+  if(exist){
+    position--;
+
+    bm->mgmtData->pages[position].dirty=1;
+
+  }
+
+
+}
+
+
+RC unpinPage (BM_BufferPool *const bm, BM_PageHandle *const page){
+
+  //find the page in the buffer pool
+  int position, k, page_count;
+
+  position=0;
+  page_count=bm->mgmtData->page_count;
+
+  boolean exist;
+
+  exist=false;
+
+  while(!exist||position<page_count){
+
+    k=bm->mgmtData->pages[position].pageNum;
+
+    if(page->pageNum==k){
+      
+      exist=true;
+
+    }
+
+    position++; //the position will be one more than real position when the loop ends
+
+  }
+
+  if(exist){
+    position--;
+
+    bm->mgmtData->pages[position].pin_fix_count--;
+
+  }
+
+}
+
+
+//assume that input BM_PageHandle has the page number and the data.
+RC forcePage (BM_BufferPool *const bm, BM_PageHandle *const page){
+  
+  writeBlock(page->pageNum, bm->mgmtData->fileHandle, page->data);
+
+  //locate the position of the desired page in the buffer pool
+
+  //find the page in the buffer pool
+  int position, k, page_count;
+
+  position=0;
+  page_count=bm->mgmtData->page_count;
+
+  boolean exist;
+
+  exist=false;
+
+  while(!exist||position<page_count){
+
+    k=bm->mgmtData->pages[position].pageNum;
+
+    if(page->pageNum==k){
+      
+      exist=true;
+
+    }
+
+    position++; //the position will be one more than real position when the loop ends
+
+  }
+
+  positioon--;
+
+  //change the dirty to 0
+  bm->mgmtData->pages[position].dirty=0;
+
+}
+
+//different strategies is implemented here.
 RC pinPage (BM_BufferPool *const bm, BM_PageHandle *const page, 
-	    const PageNumber pageNum);
+	    const PageNumber pageNum){
+
+  //check if the page is already in the buffer
+
+  //get the position of this page
+  int position, k, page_count;
+
+  position=0;
+  page_count=bm->mgmtData->page_count;
+
+  boolean exist;
+
+  exist=false;
+
+  while(!exist||position<page_count){
+
+    k=bm->mgmtData->pages[position].pageNum;
+
+    if(pageNum==k){
+      
+      exist=true;
+
+    }
+
+    position++; //the position will be one more than real position when the loop ends
+
+  }
+
+
+  if(exist){
+
+    position--;
+
+    //if it exists in buffer pool, then increase the fix count, and set the passed PageHandle
+    bm->mgmtData->pages[position].pin_fix_count++;
+
+    //set the page number, content, and other info
+    page->pageNum=pageNum;
+    page->data=bm->mgmtData->pages[position].data;
+    page->pin_fix_count=bm->mgmtData->pages[page_count].pin_fix_count;
+    page->dirty=bm->mgmtData->pages[page_count].dirty;
+
+  }
+
+  //here, will be implementing different strategies
+  else{
+
+
+    //strategy 1, FIFO
+    if(bm->strategy==RS_FIFO)
+    {
+
+      //if it doesn't exist, read the page into buffer pool, increase the fix count, and set the passed PageHandle
+      SM_PageHandle memPage;
+
+      //read the page and store it at the position that page_count is at. it should be the first empty element
+      //in the pages array.
+      memPage=bm->mgmtData->pages[page_count].data; 
+
+      readBlock(pageNum, bm->mgmtData->fileHandle, memPage); //read a page from disk to this position 
+                                                            //in buffer pool
+
+      //update other info, including the page number of this page, pin_fix_count, and dirty or not.
+      bm->mgmtData->pages[page_count].pageNum=pageNum;
+      bm->mgmtData->pages[page_count].pin_fix_count++;
+      bm->mgmtData->pages[page_count].dirty=0;
+
+
+      //set the features of PageHandle that has been passed in the method
+      page->pageNum=;
+      page->data=;
+      page->pin_fix_count=bm->mgmtData->pages[page_count].pin_fix_count;
+      page->dirty=bm->mgmtData->pages[page_count].dirty;
+
+      //increase the page_count in the mgmtData
+      page_count++;
+
+      bm->mgmtData->page_count=page_count;
+
+    }
+
+    //strategy 2, LRU
+    else if (bm->strategy==LRU)
+    {
+      /* code */
+    }
+
+    //strategy 3, CLOCK
+    else{
+      /* code */
+    }
+
+
+
+
+  }
+
+
+
+
+
+
+}
 
 // Statistics Interface
 PageNumber *getFrameContents (BM_BufferPool *const bm);
