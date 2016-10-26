@@ -62,6 +62,10 @@ typedef struct BM_mgmtData {
   //add two features, the number of pages in the pool that is occupied.
   int page_count;
 
+  //add head and tail for FIFO queue
+  int head;
+  int tail;
+
   int LRU_order[]; //hold the order of LRU
 
 } BM_mgmtData;
@@ -137,6 +141,10 @@ RC initBufferPool(BM_BufferPool *const bm, const char *const pageFileName,
 
     //4, page count
     mgmtDataPool->page_count=0;
+
+    //5, head and tail for FIFO queue structure
+    mgmtDataPool->head=-1;
+    mgmtDataPool->tail=-1;
 
     //by now, the BM_mgmtData object has the memory space as well as all info about the file on disk.
 
@@ -348,33 +356,91 @@ RC pinPage (BM_BufferPool *const bm, BM_PageHandle *const page,
     //strategy 1, FIFO
     if(bm->strategy==RS_FIFO)
     {
-
       //if it doesn't exist, read the page into buffer pool, increase the fix count, and set the passed PageHandle
-      SM_PageHandle memPage;
+      //check the status of the queue
 
-      //read the page and store it at the position that page_count is at. it should be the first empty element
-      //in the pages array.
-      memPage=bm->mgmtData->pages[page_count].data; 
+      //if the pages stored in the queue is less than the total capacity of the pool, add to the tail
+      if(bm->numPages<bm->mgmtData->page_count)
+      {
 
-      readBlock(pageNum, bm->mgmtData->fileHandle, memPage); //read a page from disk to this position 
-                                                            //in buffer pool
+        //if the queue has 0 elements, initialize the head to 0 and the tail to 0
+        if(head == -1)
+        {
+          head = 0;
+        }
 
-      //update other info, including the page number of this page, pin_fix_count, and dirty or not.
-      bm->mgmtData->pages[page_count].pageNum=pageNum;
-      bm->mgmtData->pages[page_count].pin_fix_count++;
-      bm->mgmtData->pages[page_count].dirty=0;
+        //increment tail, and assign new element to tail
+        tail++;
 
 
-      //set the features of PageHandle that has been passed in the method
-      page->pageNum=;
-      page->data=;
-      page->pin_fix_count=bm->mgmtData->pages[page_count].pin_fix_count;
-      page->dirty=bm->mgmtData->pages[page_count].dirty;
+        SM_PageHandle memPage;
 
-      //increase the page_count in the mgmtData
-      page_count++;
+        //read the page and store it at the position of tail
+        memPage=bm->mgmtData->pages[tail].data; 
 
-      bm->mgmtData->page_count=page_count;
+        readBlock(pageNum, bm->mgmtData->fileHandle, memPage); //read a page from disk to this position 
+                                                              //in buffer pool
+
+        //update other info, including the page number of this page, pin_fix_count, and dirty or not.
+        bm->mgmtData->pages[tail].pageNum=pageNum;
+        bm->mgmtData->pages[tail].pin_fix_count++;
+        bm->mgmtData->pages[tail].dirty=0;
+
+
+        //set the features of PageHandle that has been passed in the method
+        page->pageNum=;
+        page->data=;
+        page->pin_fix_count=bm->mgmtData->pages[tail].pin_fix_count;
+        page->dirty=bm->mgmtData->pages[tail].dirty;
+
+        //increase the page_count in the mgmtData
+        page_count++;
+
+        bm->mgmtData->page_count=page_count;
+
+      }
+
+      //this is when the queue is full
+      else
+      {
+        //write the new page at head position, and increment head and tail
+        SM_PageHandle memPage;
+
+        //read the page and store it at the position of head
+        memPage=bm->mgmtData->pages[head].data; 
+
+        readBlock(pageNum, bm->mgmtData->fileHandle, memPage); //read a page from disk to this position 
+                                                              //in buffer pool
+
+        head++;
+        tail++;
+
+        //if head reaches the end of the queue or the tail reaches the end of the queue, return them
+        //back to the begining of the queue
+        if(head==bm->numPages)
+        {
+          head=0;
+        }
+
+        if(tail=bm->numPages)
+        {
+          tail=0;
+        }
+
+        //update other info, including the page number of this page, pin_fix_count, and dirty or not.
+        bm->mgmtData->pages[tail].pageNum=pageNum;
+        bm->mgmtData->pages[tail].pin_fix_count++;
+        bm->mgmtData->pages[tail].dirty=0;
+
+
+        //set the features of PageHandle that has been passed in the method
+        page->pageNum=;
+        page->data=;
+        page->pin_fix_count=bm->mgmtData->pages[tail].pin_fix_count;
+        page->dirty=bm->mgmtData->pages[tail].dirty;
+
+        //since the queue is full, no need to update the page_count
+      }
 
     }
 
