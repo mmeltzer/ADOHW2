@@ -66,7 +66,7 @@ typedef struct BM_mgmtData {
   int head;
   int tail;
 
-  int LRU_order[]; //hold the order of LRU
+  int LRU_order[]; //hold the accumulative number of LRU
 
 } BM_mgmtData;
 
@@ -360,7 +360,7 @@ RC pinPage (BM_BufferPool *const bm, BM_PageHandle *const page,
       //check the status of the queue
 
       //if the pages stored in the queue is less than the total capacity of the pool, add to the tail
-      if(bm->numPages<bm->mgmtData->page_count)
+      if(bm->numPages>page_count)
       {
 
         //if the queue has 0 elements, initialize the head to 0 and the tail to 0
@@ -447,7 +447,95 @@ RC pinPage (BM_BufferPool *const bm, BM_PageHandle *const page,
     //strategy 2, LRU
     else if (bm->strategy==LRU)
     {
-      /* code */
+      //if the queue is not full, add the element into the last position
+      if(bm->numPages>page_count)
+      {
+
+        SM_PageHandle memPage;
+
+        //read the page and store it at the position of tail
+        memPage=bm->mgmtData->pages[page_count].data; 
+
+        readBlock(pageNum, bm->mgmtData->fileHandle, memPage); //read a page from disk to this position 
+                                                              //in buffer pool
+
+        //increment the LRU_Order number for each element
+        int i;
+
+        for (i=0;i<page_count;i++){
+          bm->mgmtData->LRU_order[i]++;
+        }
+
+
+        //update other info, including the page number of this page, pin_fix_count, and dirty or not.
+        bm->mgmtData->pages[tail].pageNum=pageNum;
+        bm->mgmtData->pages[tail].pin_fix_count++;
+        bm->mgmtData->pages[tail].dirty=0;
+
+
+        //set the features of PageHandle that has been passed in the method
+        page->pageNum=;
+        page->data=;
+        page->pin_fix_count=bm->mgmtData->pages[tail].pin_fix_count;
+        page->dirty=bm->mgmtData->pages[tail].dirty;
+
+        //increase the page_count in the mgmtData
+        page_count++;
+
+        bm->mgmtData->page_count=page_count;
+      }
+      //if the queue is full, use LRU strategy
+      else
+      {
+        //find the element with largest LRU_order number, and replace it with new element
+
+        //find the position of this element
+        int g, position, max_value;
+
+        max_value=bm->mgmtData->LRU_order[0];
+
+        for (g=0;g<page_count;g++){
+
+          if(bm->mgmtData->LRU_order[g]>max_value)
+          {
+            max_value=bm->mgmtData->LRU_order[g];
+            position=g;
+          }
+        }
+
+        //increment the LRU_Order number for each element
+        int f;
+
+        for (f=0;f<page_count;f++){
+          bm->mgmtData->LRU_order[f]++;
+        }
+
+
+        //replace the element at the position we got
+        SM_PageHandle memPage;
+
+        //read the page and store it at the position of tail
+        memPage=bm->mgmtData->pages[position].data; 
+
+        readBlock(pageNum, bm->mgmtData->fileHandle, memPage); //read a page from disk to this position 
+                                                              //in buffer pool
+
+
+        //update other info, including the page number of this page, pin_fix_count, and dirty or not.
+        bm->mgmtData->pages[tail].pageNum=pageNum;
+        bm->mgmtData->pages[tail].pin_fix_count++;
+        bm->mgmtData->pages[tail].dirty=0;
+
+
+        //set the features of PageHandle that has been passed in the method
+        page->pageNum=;
+        page->data=;
+        page->pin_fix_count=bm->mgmtData->pages[tail].pin_fix_count;
+        page->dirty=bm->mgmtData->pages[tail].dirty;
+
+        //since the queue is full, no need to update the page_count
+
+      }
     }
 
     //strategy 3, CLOCK
@@ -456,14 +544,7 @@ RC pinPage (BM_BufferPool *const bm, BM_PageHandle *const page,
     }
 
 
-
-
   }
-
-
-
-
-
 
 }
 
