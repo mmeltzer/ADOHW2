@@ -65,6 +65,8 @@ typedef struct BM_mgmtData {
   //add head and tail for FIFO queue
   int head;
   int tail;
+	int read_count;
+	int write_count;
 
   int LRU_order[]; //hold the accumulative number of LRU
 
@@ -153,6 +155,8 @@ RC initBufferPool(BM_BufferPool *const bm, const char *const pageFileName,
     bm->numPages=numPages;
     bm->strategy=strategy;
     bm->mgmtData=mgmtDataPool;
+	bm->read_count = 0;
+	bm->write_count = 0;
 
 
 }
@@ -182,6 +186,7 @@ RC forceFlushPool(BM_BufferPool *const bm){
     if(bm->mgmtData->pages[i].pin_fix_count==0 && bm->mgmtData->pages[i].dirty==1){
 
       writeBlock(bm->mgmtData->pages[i].pageNum, bm->mgmtData->fileHandle, bm->mgmtData->pages[i].data);
+	    bm->write_count
 
       //change the dirty into 0
       bm->mgmtData->pages[i].dirty=0;
@@ -380,6 +385,7 @@ RC pinPage (BM_BufferPool *const bm, BM_PageHandle *const page,
 
         readBlock(pageNum, bm->mgmtData->fileHandle, memPage); //read a page from disk to this position 
                                                               //in buffer pool
+	      bm->mgmtData->read_count++;
 
         //update other info, including the page number of this page, pin_fix_count, and dirty or not.
         bm->mgmtData->pages[tail].pageNum=pageNum;
@@ -411,6 +417,7 @@ RC pinPage (BM_BufferPool *const bm, BM_PageHandle *const page,
 
         readBlock(pageNum, bm->mgmtData->fileHandle, memPage); //read a page from disk to this position 
                                                               //in buffer pool
+	      bm->mgmtData->read_count++;
 
         head++;
         tail++;
@@ -458,6 +465,7 @@ RC pinPage (BM_BufferPool *const bm, BM_PageHandle *const page,
 
         readBlock(pageNum, bm->mgmtData->fileHandle, memPage); //read a page from disk to this position 
                                                               //in buffer pool
+	      bm->mgmtData->read_count++;
 
         //increment the LRU_Order number for each element
         int i;
@@ -519,6 +527,7 @@ RC pinPage (BM_BufferPool *const bm, BM_PageHandle *const page,
 
         readBlock(pageNum, bm->mgmtData->fileHandle, memPage); //read a page from disk to this position 
                                                               //in buffer pool
+	      bm->mgmtData->read_count++;
 
 
         //update other info, including the page number of this page, pin_fix_count, and dirty or not.
