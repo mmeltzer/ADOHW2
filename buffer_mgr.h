@@ -4,6 +4,7 @@
 // Include return codes and methods for logging errors
 #include "dberror.h"
 
+#include "storage_mgr.h"
 // Include bool DT
 #include "dt.h"
 
@@ -30,7 +31,12 @@ typedef struct BM_BufferPool {
 
 typedef struct BM_PageHandle {
   PageNumber pageNum;
-  char *data;
+  SM_PageHandle data;
+
+  //add two features
+  int pin_fix_count;   //can be increased or decreased
+  int dirty;    //0 is clean, 1 is dirty.
+
 } BM_PageHandle;
 
 // convenience macros
