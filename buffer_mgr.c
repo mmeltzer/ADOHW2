@@ -130,9 +130,28 @@ RC initBufferPool(BM_BufferPool *const bm, const char *const pageFileName,
 
 //how to completely shut down a buffer pool? modify it later
 RC shutdownBufferPool(BM_BufferPool *const bm){
+    int i, page_count;
+    BM_mgmtData *mgmtData=(BM_mgmtData *)(bm->mgmtData);
+    RC rc;
+    rc = forceFlushPool(bm);
+
+    if(rc != RC_OK){
+    	return rc;
+    }
+
+
+    page_count=mgmtData->page_count;
+
+    for(i=0;i<page_count; i++){
+
+    	 if(mgmtData->pages[i] != NULL){
+    		 free(mgmtData->pages[i].data);
+    	 }
+    }
+
+    mgmtData->page_count = 0;
 
     return RC_OK;
-
 }
 
 //
