@@ -395,6 +395,15 @@ RC appendEmptyBlock (SM_FileHandle *fHandle){
 	//write the empty block into the file.
 	fwrite(newpage, 1, PAGE_SIZE, fp);
 
+	fHandle->totalNumPages++;
+
+	//update menta data page
+	char str[50] = {'\0'};
+	sprintf(str, "%d", fHandle->totalNumPages);
+
+	fseek(fp, 0, SEEK_SET);
+	int c = fwrite(str, 1, 50, fp);
+
 	free(newpage);
 
 	return RC_OK;

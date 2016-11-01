@@ -22,7 +22,7 @@ declaration (if necessary).
 // Data Types and Structures
 
 
-int g_tick;
+int g_tick = 0;
 
 
 //the BM_mgmtData structure comprises:
@@ -66,15 +66,13 @@ RC initBufferPool(BM_BufferPool *const bm, const char *const pageFileName,
 		  const int numPages, ReplacementStrategy strategy, 
 		  void *stratData){
 
-  g_tick = 0;
+    //g_tick = 0;
     //initialize the BM_mgmtData
     //1, create an BM_mgmtData object
     BM_mgmtData *mgmtDataPool=(BM_mgmtData *)malloc(sizeof(BM_mgmtData));
 
     //create BM_PageHandle array
-    BM_PageHandle *pages=(BM_PageHandle *)malloc(sizeof(BM_PageHandle) * numPages);
-
-    mgmtDataPool->pages = pages;
+    BM_PageHandle *BM_pages=(BM_PageHandle *)malloc(sizeof(BM_PageHandle) * numPages);
 
     int i, k;
 
@@ -84,12 +82,17 @@ RC initBufferPool(BM_BufferPool *const bm, const char *const pageFileName,
         SM_PageHandle page=(SM_PageHandle)malloc(PAGE_SIZE);
 
         //when using [], the pointer turns to object, so we use '.'
-        pages[i].pageNum=-1;   //at beginning, set all page number to be -1.
-        pages[i].data=page;
+        BM_pages[i].pageNum=-1;   //at beginning, set all page number to be -1.
+        BM_pages[i].data=page;
+        BM_pages[i].pin_fix_count=0;
+        BM_pages[i].dirty=0;
 
     }
 
     //assign the BM_PageHandle array to BM_mgmtData
+    mgmtDataPool->pages = BM_pages;
+
+
 
     //2, initialize a SM_FileHandle, and save it into BM_mgmtData
     SM_FileHandle *fileHandle=(SM_FileHandle *)malloc(sizeof(SM_FileHandle));
@@ -102,6 +105,7 @@ RC initBufferPool(BM_BufferPool *const bm, const char *const pageFileName,
     int *LRU_Order=(int *)malloc(sizeof(int)*numPages);
 
     memset(LRU_Order, 0, sizeof(int) * numPages);
+
     mgmtDataPool->LRU_Order=LRU_Order;
 
     //4, page count
@@ -130,28 +134,32 @@ RC initBufferPool(BM_BufferPool *const bm, const char *const pageFileName,
 
 //how to completely shut down a buffer pool? modify it later
 RC shutdownBufferPool(BM_BufferPool *const bm){
-    int i, page_count;
+
+    int i, num_page;
+
     BM_mgmtData *mgmtData=(BM_mgmtData *)(bm->mgmtData);
-    RC rc;
-    rc = forceFlushPool(bm);
 
-    if(rc != RC_OK){
-    	return rc;
+    forceFlushPool(bm);
+
+    //free all of the pages
+    num_page=mgmtData->page_count;
+
+    for(i=0;i<num_page;i++)
+    {
+      free(mgmtData->pages[i].data);
     }
 
 
-    page_count=mgmtData->page_count;
+    //free mgmtData
+    free(mgmtData->pages);
+    free(mgmtData->fileHandle);
+    free(mgmtData);
 
-    for(i=0;i<page_count; i++){
 
-    	 if(mgmtData->pages[i] != NULL){
-    		 free(mgmtData->pages[i].data);
-    	 }
-    }
-
-    mgmtData->page_count = 0;
+    closePageFile(mgmtData->fileHandle);
 
     return RC_OK;
+
 }
 
 //
@@ -170,6 +178,7 @@ RC forceFlushPool(BM_BufferPool *const bm){
     if(mgmtData->pages[i].pin_fix_count==0 && mgmtData->pages[i].dirty==1){
 
       writeBlock(mgmtData->pages[i].pageNum, mgmtData->fileHandle, mgmtData->pages[i].data);
+      mgmtData->write_count++;
 
       //change the dirty into 0
       mgmtData->pages[i].dirty=0;
@@ -211,7 +220,7 @@ RC markDirty (BM_BufferPool *const bm, BM_PageHandle *const page){
 
   }
 
-  if(exist){
+  if(exist==1){
     position--;
 
     mgmtData->pages[position].dirty=1;
@@ -252,7 +261,8 @@ RC unpinPage (BM_BufferPool *const bm, BM_PageHandle *const page){
 
   }
 
-  if(exist){
+  if(exist==1){
+
     position--;
 
     mgmtData->pages[position].pin_fix_count--;
@@ -272,6 +282,7 @@ RC forcePage (BM_BufferPool *const bm, BM_PageHandle *const page){
   BM_mgmtData *mgmtData=(BM_mgmtData *)(bm->mgmtData);
 
   writeBlock(page->pageNum, mgmtData->fileHandle, page->data);
+  mgmtData->write_count++;
 
   //locate the position of the desired page in the buffer pool
 
@@ -313,10 +324,7 @@ RC forcePage (BM_BufferPool *const bm, BM_PageHandle *const page){
 RC pinPage (BM_BufferPool *const bm, BM_PageHandle *const page, 
 	    const PageNumber pageNum){
 
-
- if (pageNum == 1) {
-  int aaa = 0;
- }
+  
   //check if the page is already in the buffer
 
   //get the position of this page
@@ -326,8 +334,12 @@ RC pinPage (BM_BufferPool *const bm, BM_PageHandle *const page,
 
   BM_mgmtData *mgmtData=(BM_mgmtData *)(bm->mgmtData);
 
+  if (pageNum  >= mgmtData->fileHandle->totalNumPages) {
+    ensureCapacity(pageNum + 1, mgmtData->fileHandle);
+  }
+
   numPages=bm->numPages;
-  
+
   page_count=mgmtData->page_count;
 
   int exist=0;
@@ -360,6 +372,10 @@ RC pinPage (BM_BufferPool *const bm, BM_PageHandle *const page,
     page->pin_fix_count=mgmtData->pages[position].pin_fix_count;
     page->dirty=mgmtData->pages[position].dirty;
 
+    if (bm->strategy == RS_LRU) {
+      mgmtData->LRU_Order[position] = g_tick++;
+    }
+
     return RC_OK;
 
   }
@@ -376,16 +392,14 @@ RC pinPage (BM_BufferPool *const bm, BM_PageHandle *const page,
         //read the page and store it at the position of tail
         memPage=mgmtData->pages[page_count].data; 
 
-        readBlock(pageNum, mgmtData->fileHandle, memPage); //read a page from disk to this position 
+        RC ret = readBlock(pageNum, mgmtData->fileHandle, memPage); //read a page from disk to this position 
                                                               //in buffer pool
+        if (ret != RC_OK) {
+          return ret;
+        }
         mgmtData->read_count++;
 
-        //increment the LRU_Order number for each element
-        int i;
 
-        g_tick++;
-        mgmtData->LRU_Order[page_count] = g_tick;
-        
         //update other info, including the page number of this page, pin_fix_count, and dirty or not.
         mgmtData->pages[page_count].pageNum=pageNum;
         mgmtData->pages[page_count].pin_fix_count++;
@@ -398,14 +412,17 @@ RC pinPage (BM_BufferPool *const bm, BM_PageHandle *const page,
         page->pin_fix_count=mgmtData->pages[page_count].pin_fix_count;
         page->dirty=mgmtData->pages[page_count].dirty;
 
+        mgmtData->LRU_Order[page_count] = g_tick++;
+
         //increase the page_count in the mgmtData
         page_count++;
 
         mgmtData->page_count=page_count;
 
+
         return RC_OK;
       }
-      //if the queue is full, use LRU strategy
+      //if the queue is full, use FIFO or LRU strategy
       else
       {
         //find the element with largest LRU_order number, and replace it with new element
@@ -413,40 +430,38 @@ RC pinPage (BM_BufferPool *const bm, BM_PageHandle *const page,
         //find the position of this element
         int g, position, min_value, max_value;
 
-        position = 0;
-        //find position to replace
-        if(bm->strategy==RS_FIFO) {
-          min_value=mgmtData->LRU_Order[0];
-
-          for (g=0;g<page_count;g++){
-
-            if(mgmtData->LRU_Order[g]<=min_value)
-            {
-              min_value=mgmtData->LRU_Order[g];
-              position=g;
-            }
+        position = -1;
+        for (g=0;g<page_count;g++){
+          if (mgmtData->pages[g].pin_fix_count == 0) {
+            position = g;
+            break;
           }
-        } else {
-          max_value=mgmtData->LRU_Order[0];
+        }
 
-          for (g=0;g<page_count;g++){
+        if (position == -1) {
+          return -1;
+        }
 
-            if(mgmtData->LRU_Order[g]>=max_value)
-            {
-              max_value=mgmtData->LRU_Order[g];
-              position=g;
-            }
+        //find position to replace
+        min_value=mgmtData->LRU_Order[0];
+
+        for (g=0;g<page_count;g++){
+
+          if(mgmtData->pages[g].pin_fix_count == 0 && mgmtData->LRU_Order[g]<=min_value)
+          {
+            min_value=mgmtData->LRU_Order[g];
+            position=g;
           }
         }
 
         //increment the LRU_Order number for each element
-        g_tick++;
-        mgmtData->LRU_Order[position] = g_tick;
+        mgmtData->LRU_Order[position] = g_tick++;
         
 
         //rewrite later
         if(mgmtData->pages[position].dirty==1){
           writeBlock(mgmtData->pages[position].pageNum, mgmtData->fileHandle, mgmtData->pages[position].data);
+          mgmtData->write_count++;
         }
 
 
@@ -476,6 +491,7 @@ RC pinPage (BM_BufferPool *const bm, BM_PageHandle *const page,
         page->pin_fix_count=mgmtData->pages[position].pin_fix_count;
         page->dirty=mgmtData->pages[position].dirty;
 
+        
         //since the queue is full, no need to update the page_count
 
         return RC_OK;
@@ -491,20 +507,12 @@ PageNumber *getFrameContents (BM_BufferPool *const bm){
   int i;
   BM_mgmtData *mgmtData=(BM_mgmtData *)(bm->mgmtData);
 
-  int page_count= mgmtData->page_count;
 
   PageNumber *fcontents = malloc(sizeof(PageNumber) * bm->numPages);
 
 
-  for(i=0;i<page_count;i++){
-
-      if(mgmtData->pages[i].pin_fix_count==0)
-      {
-        fcontents[i] = mgmtData->pages[i].pageNum;
-      }
-      else{
-        fcontents[i] = NO_PAGE;
-      }
+  for(i=0;i<bm->numPages;i++){
+      fcontents[i] = mgmtData->pages[i].pageNum;
   }
 
   return fcontents;
@@ -517,12 +525,10 @@ bool *getDirtyFlags (BM_BufferPool *const bm){
 
   BM_mgmtData *mgmtData=(BM_mgmtData *)(bm->mgmtData);
 
-  int page_count= mgmtData->page_count;
-
   bool *flags = malloc(sizeof(bool) * bm->numPages);
 
-  for(i=0; i<page_count; i++){
-    if(mgmtData->pages[i].dirty = 1){
+  for(i=0; i<bm->numPages; i++){
+    if(mgmtData->pages[i].dirty == 1){
       flags[i] = true;
     }
     else{
@@ -540,11 +546,9 @@ int *getFixCounts (BM_BufferPool *const bm){
   
   BM_mgmtData *mgmtData=(BM_mgmtData *)(bm->mgmtData);
 
-  int page_count= mgmtData->page_count;
-
   int *fcounts = malloc(sizeof(int) * bm->numPages);
 
-  for(i=0; i<page_count; i++)
+  for(i=0; i<bm->numPages; i++)
   {
     fcounts[i]= mgmtData->pages[i].pin_fix_count;
   }
